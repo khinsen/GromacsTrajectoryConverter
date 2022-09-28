@@ -1,0 +1,175 @@
+#!python
+
+# Conversion of a XTC trajectory to MMTK's trajectory format.
+#
+# Written by Konrad Hinsen
+# last revision: 2016-10-28
+#
+
+from MMTK import *
+from MMTK.PDB import PDBConfiguration
+from MMTK.Trajectory import Trajectory, SnapshotGenerator, TrajectoryOutput
+from Scientific import N
+from GromacsTrajectory import XTCTrajectory
+from numpy import set_printoptions
+set_printoptions(threshold='nan')
+import getopt, os, sys
+
+
+usage = """Usage: xtc2nc [options] pdb_file xtc_file nc_file
+
+pdb_file and xtc_file must describe the same system. nc_file is the
+name of the netCDF trajectory that is created.
+
+Options:
+
+  --cell-shape
+     one of 'infinite', 'orthorhombic', or 'parallelepipedic'.
+     The default is 'parallelepipedic'. Note that the cell shape
+     information cannot be obtained from xtc_file nor from pdb_file.
+     It is, however, required for a correct interpretation of the
+     data. A wrong cell-shape leads to erroneous data in the
+     converted trajectory.
+
+  --block-size=number
+     specifies the block structure of the netCDF trajectory. The
+     default value of 1 optimizes the trajectory for step-by-step access
+     to conformations. Larger values favour atom-by-atom access to
+     one-particle trajectories for all times, which is required for the
+     calculation of dynamic quantities. The highest sensible value is
+     the number of steps in the trajectory.
+"""
+
+# Parse options
+
+try:
+    options, file_args = getopt.getopt(sys.argv[1:], '',
+                                       ['cell-shape=', 'block-size=',
+                                        'first=', 'last=', 'skip='])
+except getopt.GetoptError:
+    sys.stderr.write(usage)
+    raise SystemExit
+
+if len(file_args) != 3:
+    sys.stderr.write(usage)
+    raise SystemExit
+
+cell_shape = 'parallelepipedic'
+block_size = 1
+first = 0
+last = None
+skip = 1
+for option, value in options:
+
+    if option == '--cell-shape':
+        if value not in ['infinite', 'orthorhombic', 'parallelepipedic']:
+            sys.stderr.write("Invalid cell shape '%s'" % value)
+            raise SystemExit
+        cell_shape = value
+
+    if option == '--block-size':
+        block_size = int(value)
+        if block_size < 1:
+            sys.stderr.write("Block size must be positive.")
+            raise SystemExit
+
+    if option == '--first':
+        first = int(value)
+        if first < 0:
+            sys.stderr.write("Step numbers must be positive.")
+            raise SystemExit
+
+    if option == '--last':
+        last = int(value)
+        if last < 0:
+            sys.stderr.write("Step numbers must be positive.")
+            raise SystemExit
+
+    if option == '--skip':
+        skip = int(value)
+        if skip <= 0:
+            sys.stderr.write("Skip must be positive.")
+            raise SystemExit
+
+# Check file arguments
+
+pdb_file, xtc_file, nc_file = file_args
+if not os.path.exists(pdb_file):
+    sys.stderr.write('File %s not found\n' % pdb_file)
+    raise SystemExit
+if not os.path.exists(xtc_file):
+    sys.stderr.write('File %s not found\n' % xtc_file)
+    raise SystemExit
+if os.path.exists(nc_file):
+    sys.stderr.write('File %s already exists. ' % nc_file)
+    while True:
+        answer = raw_input('Overwrite? [y/n] ')
+        if answer == 'n':
+            raise SystemExit
+        if answer == 'y':
+            break
+
+def makeUniverse(cell_shape, pdb_file, box):
+    # Create a universe of the appropriate type
+    if cell_shape == 'infinite':
+        universe = InfiniteUniverse()
+    elif cell_shape == 'orthorhombic':
+        universe = OrthorhombicPeriodicUniverse(box.diagonal())
+    else:
+        universe = ParallelepipedicPeriodicUniverse(box)
+        print "WARNING: parallelepipedic universes have not been tested!"
+    # Create all objects from the PDB file. The PDB file must match the
+    # the XTC file (same atom order).
+    conf = PDBConfiguration(pdb_file)
+    universe.addObject(conf.createAll())
+    return universe
+
+# Open the XTC trajectory file
+xtc = XTCTrajectory(xtc_file)
+if not xtc.readStep():
+    print "Trajectory empty!"
+    raise SystemExit
+
+# Create the MMTK universe
+universe = makeUniverse(cell_shape, pdb_file, xtc.box)
+
+# Compatibility check
+if xtc.coordinates.shape[0] != universe.numberOfAtoms():
+    print "Trajectory does not match PDB file:"
+    print xtc.coordinates.shape[0], "atoms in trajectory"
+    print universe.numberOfAtoms(), "atoms in PDB file"
+    raise SystemExit
+
+# Create the output trajectory
+t = Trajectory(universe, nc_file, "w",
+               str(xtc_file), block_size = block_size)
+snapshot = SnapshotGenerator(universe,
+                             actions=[TrajectoryOutput(t, ["all"], 0, None, 1)])
+
+# Iterate over the XTC file and write to the output trajectory
+step = 0
+conf_array = universe.configuration().array
+print
+while True:
+    if last is not None and step > last:
+        break
+    if step >= first and (step-first) % skip == 0:
+        print chr(27) + "[ASimulation step ", xtc.step, \
+            " - time ", xtc.time, " ps"
+        conf_array[:, 0] = xtc.coordinates[:, 0]
+        conf_array[:, 1] = xtc.coordinates[:, 1]
+        conf_array[:, 2] = xtc.coordinates[:, 2]
+        if cell_shape is 'orthorhombic':
+            universe.setSize(xtc.box.diagonal())
+        elif cell_shape is 'parallelepipedic':
+            universe.setShape(xtc.box)
+        step_data = {'time': xtc.time, 'step': xtc.step}
+        snapshot(data=step_data)
+    if not xtc.readStep():
+        break
+    step += 1
+
+# Close the output trajectory
+t.close()
+
+print "Conversion finished"
