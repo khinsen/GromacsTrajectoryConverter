@@ -1,0 +1,32 @@
+This Python script reads a trajectory in GROMACS' XTC format plus a
+compatible PDB file describing the molecular system. It writes the
+system and trajectory data to a netCDF file using MMTK conventions.
+
+Usage: xtc2nc [options] pdb_file xtc_file nc_file
+
+pdb_file and xtc_file must describe the same system. nc_file is the
+name of the netCDF trajectory that is created.
+
+Options:
+
+  --cell-shape
+     one of 'infinite', 'orthorhombic', or 'parallelepipedic'.
+     The default is 'parallelepipedic'. Note that the cell shape
+     information cannot be obtained from xtc_file nor from pdb_file.
+     It is, however, required for a correct interpretation of the
+     data. A wrong cell-shape leads to erroneous data in the
+     converted trajectory.
+
+  --block-size=number
+     specifies the block structure of the netCDF trajectory. The
+     default value of 1 optimizes the trajectory for step-by-step access
+     to conformations. Larger values favour atom-by-atom access to
+     one-particle trajectories for all times, which is required for the
+     calculation of dynamic quantities. The highest sensible value is
+     the number of steps in the trajectory.
+
+Konrad Hinsen
+Centre de Biophysique Moleculaire (CNRS Orléans)
+and
+Synchtron Soleil (Saint Aubin, France)
+E-Mail: hinsen@cnrs.fr
